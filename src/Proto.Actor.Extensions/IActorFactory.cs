@@ -1,4 +1,6 @@
-﻿namespace Proto
+﻿using System;
+
+namespace Proto
 {
     public interface IActorFactory
     {
@@ -9,17 +11,19 @@
         /// <param name="id"></param>
         /// <param name="address"></param>
         /// <param name="parent"></param>
-        /// <returns></returns>
-        PID GetActor<T>(string id = null, string address = null, IContext parent = null)
+        /// <param name="props"></param>
+        /// <param name="parameters"></param>
+        /// <returns>The PID of the Actor</returns>
+        PID GetActor<T>(string id = null, string address = null, IContext parent = null, Func<Props, Props> props = null, params object[] parameters)
             where T : IActor;
 
         /// <summary>
-        /// Get or Create a Local Actor by id
+        /// Get a Local Actor by id
         /// </summary>
         /// <param name="id"></param>
         /// <param name="address"></param>
         /// <param name="parent"></param>
-        /// <returns></returns>
+        /// <returns>The PID of the Actor</returns>
         PID GetActor(string id, string address = null, IContext parent = null);
 
         /// <summary>
