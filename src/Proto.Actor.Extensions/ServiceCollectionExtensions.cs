@@ -13,5 +13,10 @@ namespace Proto
             registerAction?.Invoke(registry);
             services.AddSingleton(registry);
         }
+
+        public static void AddProtoActorModule(this IServiceCollection services, IActorModule module)
+        {
+            module.Configure(services);
+        }
     }
 }
