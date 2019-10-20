@@ -134,7 +134,7 @@ namespace Proto.Remote
         private PID SpawnWriter(string address, IContext context)
         {
             var writerProps =
-                Props.FromProducer(() => new EndpointWriter(address, Remote.RemoteConfig.ChannelOptions, Remote.RemoteConfig.CallOptions, Remote.RemoteConfig.ChannelCredentials))
+                Props.FromProducer(() => new EndpointWriter(address))
                      .WithMailbox(() => new EndpointWriterMailbox(Remote.RemoteConfig.EndpointWriterBatchSize));
             var writer = context.Spawn(writerProps);
             return writer;

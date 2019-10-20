@@ -4,39 +4,43 @@
 //   </copyright>
 // -----------------------------------------------------------------------
 
+using System;
+using System.Buffers;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Grpc.Core;
-using Grpc.Core.Utils;
 using Proto.Mailbox;
+using RSocket.RPC;
+using static Proto.Remote.Remoting;
 
 namespace Proto.Remote
 {
-    public class EndpointReader : Remoting.RemotingBase
-    {
+    public class EndpointReader : RemotingServer
+    {     
         private bool _suspended;
 
-        public override Task<ConnectResponse> Connect(ConnectRequest request, ServerCallContext context)
+        public override Task<ConnectResponse> Connect(ConnectRequest message, ReadOnlySequence<byte> metadata)
         {
             if (_suspended)
-            {
-                throw new RpcException(Status.DefaultCancelled, "Suspended");
-            }
+                throw new Exception("Suspended");
 
-            return Task.FromResult(new ConnectResponse()
-            {
-                DefaultSerializerId = Serialization.DefaultSerializerId
-            });
+            return Task.FromResult(new ConnectResponse() { DefaultSerializerId = Serialization.DefaultSerializerId });
         }
 
-        public override async Task Receive(IAsyncStreamReader<MessageBatch> requestStream,
-            IServerStreamWriter<Unit> responseStream, ServerCallContext context)
+        public override IAsyncEnumerable<Unit> Receive(IAsyncEnumerable<MessageBatch> messages, ReadOnlySequence<byte> metadata)
         {
             var targets = new PID[100];
-            await requestStream.ForEachAsync(batch =>
+
+            //var x = await messages.Select(m => m).ToListAsync();
+
+            return from message in messages
+                   select new Unit();
+
+            /*
+            await foreach(var batch in messages)
             {
                 if (_suspended)
-                    return Actor.Done;
+                    break;
 
                 //only grow pid lookup if needed
                 if (batch.TargetNames.Count > targets.Length)
@@ -48,6 +52,7 @@ namespace Proto.Remote
                 {
                     targets[i] = new PID(ProcessRegistry.Instance.Address, batch.TargetNames[i]);
                 }
+
                 var typeNames = batch.TypeNames.ToArray();
                 foreach (var envelope in batch.Envelopes)
                 {
@@ -76,8 +81,9 @@ namespace Proto.Remote
                     }
                 }
 
-                return Actor.Done;
-            });
+                yield return new Unit();
+            }
+            */
         }
 
         public void Suspend(bool suspended)

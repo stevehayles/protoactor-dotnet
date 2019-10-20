@@ -5,11 +5,14 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using RSocket;
+using RSocket.RPC;
+using RSocket.Transports;
 
 namespace Proto.Remote
 {
@@ -17,7 +20,7 @@ namespace Proto.Remote
     {
         private static readonly ILogger Logger = Log.CreateLogger(typeof(Remote).FullName);
 
-        private static Server _server;
+        private static RSocketRPCServer _server;
         private static readonly Dictionary<string, Props> Kinds = new Dictionary<string, Props>();
         public static RemoteConfig RemoteConfig { get; private set; }
         public static PID ActivatorPid { get; private set; }
@@ -53,23 +56,95 @@ namespace Proto.Remote
 
             ProcessRegistry.Instance.RegisterHostResolver(pid => new RemoteProcess(pid));
 
-            EndpointManager.Start();
+            EndpointManager.Start();         
             _endpointReader = new EndpointReader();
-            _server = new Server
-            {
-                Services = { Remoting.BindService(_endpointReader) },
-                Ports = { new ServerPort(hostname, port, config.ServerCredentials) }
-            };
-            _server.Start();
 
-            var boundPort = _server.Ports.Single().BoundPort;
-            var boundAddr = $"{hostname}:{boundPort}";
-            var addr = $"{config.AdvertisedHostname??hostname}:{config.AdvertisedPort?? boundPort}";
-            ProcessRegistry.Instance.Address = addr;
+            //var uri = new Uri($"tcp://{hostname}:{port}");
+            //_server = new RSocketRPCServer(uri, _endpointReader);
+            //_server.Start();
+
+            var loopback = new LoopbackTransport();
+            var server = new RSocketServer(loopback.Beyond);
+            server.ConnectAsync().Wait();
+            RSocketService.Register(server, _endpointReader);
+
+            
+            _ = Task.Run(async () =>
+            {
+                //var transport = new ClientSocketTransport(new Uri($"tcp://{hostname}:{port}"));
+                var client = new RSocketClient(loopback);
+                var service = new Remoting.RemotingClient(client);
+                await client.ConnectAsync();
+
+                var m = new[] { new RemoteDeliver(new Proto.MessageHeader(), "testmessage", new PID("add", "id"), new PID("add", "id"), 0) };
+                var envelopes = new List<MessageEnvelope>();
+                var typeNames = new Dictionary<string, int>();
+                var targetNames = new Dictionary<string, int>();
+                var typeNameList = new List<string>();
+                var targetNameList = new List<string>();
+                foreach (var rd in m)
+                {
+                    var targetName = rd.Target.Id;
+                    var serializerId = rd.SerializerId == -1 ? 0 : rd.SerializerId;
+
+                    if (!targetNames.TryGetValue(targetName, out var targetId))
+                    {
+                        targetId = targetNames[targetName] = targetNames.Count;
+                        targetNameList.Add(targetName);
+                    }
+
+                    var typeName = "type";// Serialization.GetTypeName(rd.Message, serializerId);
+                    if (!typeNames.TryGetValue(typeName, out var typeId))
+                    {
+                        typeId = typeNames[typeName] = typeNames.Count;
+                        typeNameList.Add(typeName);
+                    }
+
+                    MessageHeader header = null;
+                    if (rd.Header != null && rd.Header.Count > 0)
+                    {
+                        header = new MessageHeader();
+                        header.HeaderData.Add(rd.Header.ToDictionary());
+                    }
+
+                    var bytes = System.Text.Encoding.UTF8.GetBytes("MY PAYLOAD");// Serialization.Serialize(rd.Message, serializerId);
+                    var envelope = new MessageEnvelope
+                    {
+                        MessageData = Google.Protobuf.ByteString.CopyFromUtf8("Test to see if data gets longer"),
+                        Sender = rd.Sender,
+                        Target = targetId,
+                        TypeId = typeId,
+                        SerializerId = serializerId,
+                        MessageHeader = header,
+                    };
+
+                    envelopes.Add(envelope);
+                }
+
+                var batch = new MessageBatch();
+                batch.TargetNames.AddRange(targetNameList);
+                batch.TypeNames.AddRange(typeNameList);
+                batch.Envelopes.AddRange(envelopes);
+
+                //await service.Connect(new ConnectRequest(), ReadOnlySequence<byte>.Empty);
+
+                var results = await service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable()).ToListAsync();
+
+                /*
+                await foreach (var unit in service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty))
+                {
+                    ;
+                }
+                */
+
+            });
+
+            var address = $"{hostname}:{port}";
+            ProcessRegistry.Instance.Address = address;
 
             SpawnActivator();
 
-            Logger.LogDebug($"Starting Proto.Actor server on {boundAddr} ({addr})");
+            Logger.LogDebug($"Starting Proto.Actor server on {address}");
         }
 
         public static void Shutdown(bool gracefull = true)
@@ -81,18 +156,18 @@ namespace Proto.Remote
                     EndpointManager.Stop();
                     _endpointReader.Suspend(true);
                     StopActivator();
-                    _server.ShutdownAsync().Wait(10000);
+                    //_server.ShutdownAsync().Wait(10000);
                 }
                 else
                 {
-                    _server.KillAsync().Wait(10000);
+                    //_server.KillAsync().Wait(10000);
                 }
                 
                 Logger.LogDebug($"Proto.Actor server stopped on {ProcessRegistry.Instance.Address}. Graceful:{gracefull}");
             }
             catch(Exception ex)
             {
-                _server.KillAsync().Wait(1000);
+                //_server.KillAsync().Wait(1000);
                 Logger.LogError($"Proto.Actor server stopped on {ProcessRegistry.Instance.Address} with error:\n{ex.Message}");
             }
         }

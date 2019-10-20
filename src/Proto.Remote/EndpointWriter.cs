@@ -5,11 +5,15 @@
 // -----------------------------------------------------------------------
 
 using System;
+using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
-using Grpc.Core;
-using Grpc.Core.Utils;
+using AsyncCollection;
 using Microsoft.Extensions.Logging;
+using RSocket;
+using RSocket.Transports;
 
 namespace Proto.Remote
 {
@@ -17,21 +21,20 @@ namespace Proto.Remote
     {
         private int _serializerId;
         private readonly string _address;
-        private readonly CallOptions _callOptions;
-        private readonly ChannelCredentials _channelCredentials;
-        private readonly IEnumerable<ChannelOption> _channelOptions;
         private readonly ILogger _logger = Log.CreateLogger<EndpointWriter>();
-        private Channel _channel;
-        private Remoting.RemotingClient _client;
-        private AsyncDuplexStreamingCall<MessageBatch, Unit> _stream;
-        private IClientStreamWriter<MessageBatch> _streamWriter;
+        private readonly BlockingCollection<MessageBatch> _messageBatchQueue;
+        private readonly IAsyncEnumerable<MessageBatch> _messages;
+        private readonly AsyncCollection<MessageBatch> _messageQueue;
 
-        public EndpointWriter(string address, IEnumerable<ChannelOption> channelOptions, CallOptions callOptions, ChannelCredentials channelCredentials)
+        private Remoting.RemotingClient _client;
+
+        public EndpointWriter(string address)
         {
             _address = address;
-            _channelOptions = channelOptions;
-            _callOptions = callOptions;
-            _channelCredentials = channelCredentials;
+            //_messageBatchQueue = new BlockingCollection<MessageBatch>();
+            //_messages = Messages();
+
+            _messageQueue = new AsyncCollection<MessageBatch>();
         }
 
         public async Task ReceiveAsync(IContext context)
@@ -101,58 +104,70 @@ namespace Proto.Remote
                     batch.TypeNames.AddRange(typeNameList);
                     batch.Envelopes.AddRange(envelopes);
 
-                    await SendEnvelopesAsync(batch, context);
+                    _messageQueue.Add(batch);
+
+                    await foreach (var x in _client.Receive(new [] { batch }.ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty))
+                    {
+                        ;
+                    }
+
                     break;
             }
         }
 
-        private async Task SendEnvelopesAsync(MessageBatch batch, IContext context)
+        async IAsyncEnumerable<MessageBatch> Messages()
         {
-            try
+            int a = 6;
+            foreach (var messageBatch in _messageBatchQueue.GetConsumingEnumerable())
             {
-                await _streamWriter.WriteAsync(batch);
-            }
-            catch (Exception x)
-            {
-                context.Stash();
-                _logger.LogError($"gRPC Failed to send to address {_address}, reason {x.Message}");
-                throw;
+                yield return messageBatch;
+                await Task.Delay(0);
             }
         }
 
         //shutdown channel before restarting
-        private Task RestartingAsync() => _channel.ShutdownAsync();
+        private Task RestartingAsync() => Task.CompletedTask; // TODO look at proper shutdown and restart
 
         //shutdown channel before stopping
-        private Task StoppedAsync() => _channel.ShutdownAsync();
+        private Task StoppedAsync() => Task.CompletedTask; // TODO look at proper shutdown and restart
 
         private async Task StartedAsync()
         {
             _logger.LogDebug($"Connecting to address {_address}");
-            _channel = new Channel(_address, _channelCredentials, _channelOptions);
-            _client = new Remoting.RemotingClient(_channel);
+
+            var transport = new ClientSocketTransport(new Uri($"tcp://{_address}"));
+            var rsocketClient = new RSocketClient(transport);
+            await rsocketClient.ConnectAsync();
+
+            _client = new Remoting.RemotingClient(rsocketClient);
 
             try
             {
-                var res = await _client.ConnectAsync(new ConnectRequest());
+                var res = await _client.Connect(new ConnectRequest(), ReadOnlySequence<byte>.Empty);
                 _serializerId = res.DefaultSerializerId;
-                _stream = _client.Receive(_callOptions);
-                _streamWriter = _stream.RequestStream;
+
+                /*
+                _ = Task.Run(() =>
+                {
+                    _client.Receive(_messageQueue, ReadOnlySequence<byte>.Empty);
+                });  */  
             }
             catch (Exception ex)
             {
-                _logger.LogError($"GRPC Failed to connect to address {_address}\n{ex}");
+                _logger.LogError($"RPC Failed to connect to address {_address}\n{ex}");
                 //Wait for 2 seconds to restart and retry
                 //Replace with Exponential Backoff
                 await Task.Delay(2000);
                 throw;
             }
 
-            var _ = Task.Factory.StartNew(async () =>
+            // TODO Understand the existing functionality and replicate if relevant
+            _ = Task.Factory.StartNew(async () =>
             {
                 try
                 {
-                    await _stream.ResponseStream.ForEachAsync(i => Actor.Done);
+                    
+                    //await _stream.ResponseStream.ForEachAsync(i => Actor.Done);
                 }
                 catch (Exception x)
                 {
@@ -169,6 +184,7 @@ namespace Proto.Remote
             {
                 Address = _address
             };
+
             Actor.EventStream.Publish(connected);
 
             _logger.LogDebug($"Connected to address {_address}");

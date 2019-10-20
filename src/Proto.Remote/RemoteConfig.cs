@@ -5,7 +5,7 @@
 // -----------------------------------------------------------------------
 
 using System.Collections.Generic;
-using Grpc.Core;
+//using Grpc.Core;
 
 namespace Proto.Remote
 {
@@ -20,22 +20,22 @@ namespace Proto.Remote
         /// <summary>
         /// Gets or sets the ChannelOptions for the gRPC channel.
         /// </summary>
-        public IEnumerable<ChannelOption> ChannelOptions { get; set; }
+        //public IEnumerable<ChannelOption> ChannelOptions { get; set; }
 
         /// <summary>
         /// Gets or sets the CallOptions for the gRPC channel.
         /// </summary>
-        public CallOptions CallOptions { get; set; }
+        //public CallOptions CallOptions { get; set; }
 
         /// <summary>
         /// Gets or sets the ChannelCredentials for the gRPC channel. The default is Insecure.
         /// </summary>
-        public ChannelCredentials ChannelCredentials { get; set; } = ChannelCredentials.Insecure;
+        //public ChannelCredentials ChannelCredentials { get; set; } = ChannelCredentials.Insecure;
 
         /// <summary>
         /// Gets or sets the ServerCredentials for the gRPC server. The default is Insecure.
         /// </summary>
-        public ServerCredentials ServerCredentials { get; set; } = ServerCredentials.Insecure;
+        //public ServerCredentials ServerCredentials { get; set; } = ServerCredentials.Insecure;
 
         /// <summary>
         /// Gets or sets the advertised hostname for the remote system.
