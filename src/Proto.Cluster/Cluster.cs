@@ -12,62 +12,83 @@ using Proto.Remote;
 
 namespace Proto.Cluster
 {
-    public static class Cluster
+    public class Cluster
     {
         private static readonly ILogger Logger = Log.CreateLogger(typeof(Cluster).FullName);
 
-        internal static ClusterConfig Config;
+        internal ClusterConfig Config;
+        public ActorSystem System
+        {
+            get;
+        }
 
-        public static void Start(string clusterName, string address, int port, IClusterProvider cp) => StartWithConfig(new ClusterConfig(clusterName, address, port, cp));
+        public Remote.Remote Remote
+        {
+            get;
+        }
 
-        public static void StartWithConfig(ClusterConfig config)
+        public Cluster(ActorSystem system, Serialization serialization)
+        {
+            System = system;
+            Remote = new Remote.Remote(system, serialization);
+            Partition = new Partition(this);
+            MemberList = new MemberList(this);
+            PidCache = new PidCache(this);
+        }
+        internal Partition Partition { get; }
+        internal MemberList MemberList { get; }
+        internal PidCache PidCache { get; }
+
+        public Task Start(string clusterName, string address, int port, IClusterProvider cp)
+            => Start(new ClusterConfig(clusterName, address, port, cp));
+
+        public async Task Start(ClusterConfig config)
         {
             Config = config;
 
-            Remote.Remote.Start(Config.Address, Config.Port, Config.RemoteConfig);
-        
-            Serialization.RegisterFileDescriptor(ProtosReflection.Descriptor);
+            this.Remote.Start(Config.Address, Config.Port, Config.RemoteConfig);
+
+            this.Remote.Serialization.RegisterFileDescriptor(ProtosReflection.Descriptor);
+
             Logger.LogInformation("Starting Proto.Actor cluster");
-            var (host, port) = ParseAddress(ProcessRegistry.Instance.Address);
-            var kinds = Remote.Remote.GetKnownKinds();
+
+            var kinds = this.Remote.GetKnownKinds();
+
             Partition.Setup(kinds);
             PidCache.Setup();
             MemberList.Setup();
-            Config.ClusterProvider.RegisterMemberAsync(Config.Name, host, port, kinds, config.InitialMemberStatusValue, config.MemberStatusValueSerializer).Wait();
-            Config.ClusterProvider.MonitorMemberStatusChanges();
 
-            Logger.LogInformation("Started Cluster");
+            var (host, port) = System.ProcessRegistry.GetAddress();
+
+            await Config.ClusterProvider.RegisterMemberAsync(this, Config.Name, host, port, kinds, Config.InitialMemberStatusValue, Config.MemberStatusValueSerializer
+            );
+            Config.ClusterProvider.MonitorMemberStatusChanges(this);
+
+            Logger.LogInformation("Started cluster");
         }
 
-        public static void Shutdown(bool gracefull = true)
+        public async Task Shutdown(bool graceful = true)
         {
-            if (gracefull)
+            if (graceful)
             {
-                Config.ClusterProvider.Shutdown();
-                //This is to wait ownership transfering complete.
-                Task.Delay(2000).Wait();
+                await Config.ClusterProvider.Shutdown(this);
+
+                //This is to wait ownership transferring complete.
+                await Task.Delay(2000);
+
                 MemberList.Stop();
                 PidCache.Stop();
                 Partition.Stop();
             }
 
-            Remote.Remote.Shutdown(gracefull);
+            await Remote.Shutdown(graceful);
 
             Logger.LogInformation("Stopped Cluster");
         }
 
-        private static (string host, int port) ParseAddress(string address)
-        {
-            //TODO: use correct parsing
-            var parts = address.Split(':');
-            var host = parts[0];
-            var port = int.Parse(parts[1]);
-            return (host, port);
-        }
+        public Task<(PID, ResponseStatusCode)> GetAsync(string name, string kind) => GetAsync(name, kind, CancellationToken.None);
 
-        public static Task<(PID, ResponseStatusCode)> GetAsync(string name, string kind) => GetAsync(name, kind, CancellationToken.None);
-
-        public static async Task<(PID, ResponseStatusCode)> GetAsync(string name, string kind, CancellationToken ct)
+        public async Task<(PID, ResponseStatusCode)> GetAsync(string name, string kind, CancellationToken ct)
         {
             //Check Cache
             if (PidCache.TryGetCache(name, out var pid))
@@ -82,18 +103,21 @@ namespace Proto.Cluster
             }
 
             var remotePid = Partition.PartitionForKind(address, kind);
+
             var req = new ActorPidRequest
             {
                 Kind = kind,
                 Name = name
             };
 
+            Logger.LogDebug("Requesting remote PID from {Partition}:{Remote} {@Request}", address, remotePid, req);
             try
             {
                 var resp = ct == CancellationToken.None
-                           ? await RootContext.Empty.RequestAsync<ActorPidResponse>(remotePid, req, Config.TimeoutTimespan)
-                           : await RootContext.Empty.RequestAsync<ActorPidResponse>(remotePid, req, ct);
-                var status = (ResponseStatusCode) resp.StatusCode;
+                    ? await System.Root.RequestAsync<ActorPidResponse>(remotePid, req, Config.TimeoutTimespan)
+                    : await System.Root.RequestAsync<ActorPidResponse>(remotePid, req, ct);
+                var status = (ResponseStatusCode)resp.StatusCode;
+
                 switch (status)
                 {
                     case ResponseStatusCode.OK:
@@ -103,16 +127,16 @@ namespace Proto.Cluster
                         return (resp.Pid, status);
                 }
             }
-            catch(TimeoutException)
+            catch (TimeoutException e)
             {
+                Logger.LogWarning(e, "Remote PID request timeout {@Request}", req);
                 return (null, ResponseStatusCode.Timeout);
             }
-            catch
+            catch (Exception e)
             {
+                Logger.LogError(e, "Error occured requesting remote PID {@Request}", req);
                 return (null, ResponseStatusCode.Error);
             }
         }
-
-        public static void RemoveCache(string name) => PidCache.RemoveCacheByName(name);
     }
 }

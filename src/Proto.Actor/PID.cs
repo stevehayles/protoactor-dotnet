@@ -4,16 +4,12 @@
 //   </copyright>
 // -----------------------------------------------------------------------
 
-using System;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace Proto
 {
     // ReSharper disable once InconsistentNaming
     public partial class PID
     {
-        private Process _process;
+        private Process? _process;
 
         public PID(string address, string id)
         {
@@ -26,77 +22,42 @@ namespace Proto
             _process = process;
         }
 
-        internal Process Ref
+        internal Process? Ref(ActorSystem system)
         {
-            get
-            {
-                var p = _process;
-                if (p != null)
-                {
-                    if (p is ActorProcess lp && lp.IsDead)
-                    {
-                        _process = null;
-                    }
-                    return _process;
-                }
 
-                var reff = ProcessRegistry.Instance.Get(this);
-                if (!(reff is DeadLetterProcess))
+            var p = _process;
+            if (p != null)
+            {
+                if (p is ActorProcess lp && lp.IsDead)
                 {
-                    _process = reff;
+                    _process = null;
                 }
 
                 return _process;
             }
+
+            var reff = system.ProcessRegistry.Get(this);
+            if (!(reff is DeadLetterProcess))
+            {
+                _process = reff;
+            }
+
+            return _process;
+
         }
 
-        internal void SendUserMessage(object message)
+        internal void SendUserMessage(ActorSystem system, object message)
         {
-            var reff = Ref ?? ProcessRegistry.Instance.Get(this);
+            var reff = Ref(system) ?? system.ProcessRegistry.Get(this);
             reff.SendUserMessage(this, message);
         }
 
-        public void SendSystemMessage(object sys)
+        public void SendSystemMessage(ActorSystem system,object sys)
         {
-            var reff = Ref ?? ProcessRegistry.Instance.Get(this);
+            var reff = Ref(system) ?? system.ProcessRegistry.Get(this);
             reff.SendSystemMessage(this, sys);
         }
 
-        [Obsolete("Replaced with Context.Stop(pid)", false)]
-        public void Stop()
-        {
-            var reff = ProcessRegistry.Instance.Get(this);
-            reff.Stop(this);
-        }
-
-        [Obsolete("Replaced with Context.StopAsync(pid)", false)]
-        public Task StopAsync()
-        {
-            var future = new FutureProcess<object>();
-
-            SendSystemMessage(new Watch(future.Pid));
-            Stop();
-
-            return future.Task;
-        }
-
-        [Obsolete("Replaced with Context.Poison(pid)", false)]
-        public void Poison() => SendUserMessage(new PoisonPill());
-
-        [Obsolete("Replaced with Context.PoisonAsync(pid)", false)]
-        public Task PoisonAsync()
-        {
-            var future = new FutureProcess<object>();
-
-            SendSystemMessage(new Watch(future.Pid));
-            Poison();            
-
-            return future.Task;
-        }
-
-        public string ToShortString()
-        {
-            return Address + "/" + Id;
-        }
+        public string ToShortString() => Address + "/" + Id;
     }
 }

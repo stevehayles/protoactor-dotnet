@@ -12,16 +12,16 @@ namespace Proto
     //TODO: make immutable as the same envelope can be sent to multiple targets
     public class MessageEnvelope
     {
-        public MessageEnvelope()
+        public MessageEnvelope(object message, PID? sender, MessageHeader? header)
         {
-        }
-
-        public MessageEnvelope(object message, PID sender, MessageHeader header)
-        {
-            Sender = sender; 
+            Sender = sender;
             Message = message;
             Header = header;
         }
+
+        public PID? Sender { get; }
+        public object Message { get; }
+        public MessageHeader? Header { get; }
 
         public static MessageEnvelope Wrap(object message)
         {
@@ -29,12 +29,9 @@ namespace Proto
             {
                 return env;
             }
+
             return new MessageEnvelope(message, null, null);
         }
-
-        public PID Sender { get; }
-        public object Message { get; }
-        public MessageHeader Header { get; }
 
         public MessageEnvelope WithSender(PID sender) => new MessageEnvelope(Message, sender, Header);
 
@@ -47,15 +44,14 @@ namespace Proto
             var header = (Header ?? new MessageHeader()).With(key, value);
             return new MessageEnvelope(Message, Sender, header);
         }
-        
+
         public MessageEnvelope WithHeaders(IEnumerable<KeyValuePair<string, string>> items)
         {
             var header = (Header ?? new MessageHeader()).With(items);
             return new MessageEnvelope(Message, Sender, header);
-
         }
 
-        public static (object message, PID sender, MessageHeader headers) Unwrap(object message)
+        public static (object message, PID? sender, MessageHeader? headers) Unwrap(object message)
         {
             if (message is MessageEnvelope envelope)
             {
@@ -64,14 +60,14 @@ namespace Proto
 
             return (message, null, null);
         }
-        
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static MessageHeader UnwrapHeader(object message) => (message as MessageEnvelope)?.Header;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static object UnwrapMessage(object message) => message is MessageEnvelope r ? r.Message : message;
+        public static MessageHeader UnwrapHeader(object? message) => (message as MessageEnvelope)?.Header ?? MessageHeader.Empty;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static PID UnwrapSender(object message) => (message as MessageEnvelope)?.Sender;
+        public static object? UnwrapMessage(object? message) => message is MessageEnvelope r ? r.Message : message;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static PID? UnwrapSender(object? message) => (message as MessageEnvelope)?.Sender;
     }
 }

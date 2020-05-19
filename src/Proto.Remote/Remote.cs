@@ -3,6 +3,17 @@
 //       Copyright (C) 2015-2018 Asynkron HB All rights reserved
 //   </copyright>
 // -----------------------------------------------------------------------
+// Modified file in context of repo fork : https://github.com/Optis-World/protoactor-dotnet
+// Copyright 2019 ANSYS, Inc.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 using System;
 using System.Collections.Generic;
@@ -13,130 +24,136 @@ using Microsoft.Extensions.Logging;
 
 namespace Proto.Remote
 {
-    public static class Remote
+    public class Remote
     {
         private static readonly ILogger Logger = Log.CreateLogger(typeof(Remote).FullName);
 
-        private static Server _server;
-        private static readonly Dictionary<string, Props> Kinds = new Dictionary<string, Props>();
-        public static RemoteConfig RemoteConfig { get; private set; }
-        public static PID ActivatorPid { get; private set; }
+        private Server server;
+        private readonly Dictionary<string, Props> Kinds = new Dictionary<string, Props>();
+        public RemoteConfig RemoteConfig { get; private set; }
+        public PID ActivatorPid { get; private set; }
 
-        private static EndpointReader _endpointReader;
-
-        public static string[] GetKnownKinds()
+        private EndpointReader _endpointReader;
+        private EndpointManager _endpointManager;
+        private readonly ActorSystem _system;
+        public Serialization Serialization
         {
-            return Kinds.Keys.ToArray();
+            get;
         }
 
-        public static void RegisterKnownKind(string kind, Props props)
-        {
-            Kinds.Add(kind, props);
-        }
+        public string[] GetKnownKinds() => Kinds.Keys.ToArray();
 
-        public static Props GetKnownKind(string kind)
+        public void RegisterKnownKind(string kind, Props props) => Kinds.Add(kind, props);
+
+        // Modified class in context of repo fork : https://github.com/Optis-World/protoactor-dotnet
+        public void UnregisterKnownKind(string kind) => Kinds.Remove(kind);
+
+        public Props GetKnownKind(string kind)
         {
-            if (Kinds.TryGetValue(kind, out var props)){
+            if (Kinds.TryGetValue(kind, out var props))
+            {
                 return props;
             }
+
             throw new ArgumentException($"No Props found for kind '{kind}'");
         }
 
-        public static void Start(string hostname, int port)
+        public Remote(ActorSystem system, Serialization serialization)
         {
-            Start(hostname, port, new RemoteConfig());
+            _system = system;
+            Serialization = serialization;
+
         }
 
-        public static void Start(string hostname, int port, RemoteConfig config)
+        public void Start(string hostname, int port) => Start(hostname, port, new RemoteConfig());
+
+        public void Start(string hostname, int port, RemoteConfig config)
         {
             RemoteConfig = config;
+            _endpointManager = new EndpointManager(this, _system);
+            _endpointReader = new EndpointReader(_system, _endpointManager, Serialization);
+            _system.ProcessRegistry.RegisterHostResolver(pid => new RemoteProcess(this, _system, _endpointManager, pid));
 
-            ProcessRegistry.Instance.RegisterHostResolver(pid => new RemoteProcess(pid));
-
-            EndpointManager.Start();
-            _endpointReader = new EndpointReader();
-            _server = new Server
+            server = new Server
             {
                 Services = { Remoting.BindService(_endpointReader) },
                 Ports = { new ServerPort(hostname, port, config.ServerCredentials) }
             };
-            _server.Start();
+            server.Start();
 
-            var boundPort = _server.Ports.Single().BoundPort;
-            var boundAddr = $"{hostname}:{boundPort}";
-            var addr = $"{config.AdvertisedHostname??hostname}:{config.AdvertisedPort?? boundPort}";
-            ProcessRegistry.Instance.Address = addr;
-
+            var boundPort = server.Ports.Single().BoundPort;
+            _system.ProcessRegistry.SetAddress(config.AdvertisedHostname ?? hostname, config.AdvertisedPort ?? boundPort);
+            _endpointManager.Start();
             SpawnActivator();
 
-            Logger.LogDebug($"Starting Proto.Actor server on {boundAddr} ({addr})");
+            Logger.LogDebug("Starting Proto.Actor server on {Host}:{Port} ({Address})", hostname, boundPort, _system.ProcessRegistry.Address);
         }
 
-        public static void Shutdown(bool gracefull = true)
+        public async Task Shutdown(bool graceful = true)
         {
             try
             {
-                if (gracefull)
+                if (graceful)
                 {
-                    EndpointManager.Stop();
+                    _endpointManager.Stop();
                     _endpointReader.Suspend(true);
                     StopActivator();
-                    _server.ShutdownAsync().Wait(10000);
+                    await server.ShutdownAsync();
                 }
                 else
                 {
-                    _server.KillAsync().Wait(10000);
+                    await server.KillAsync();
                 }
-                
-                Logger.LogDebug($"Proto.Actor server stopped on {ProcessRegistry.Instance.Address}. Graceful:{gracefull}");
+
+                Logger.LogDebug(
+                    "Proto.Actor server stopped on {Address}. Graceful: {Graceful}",
+                    _system.ProcessRegistry.Address, graceful
+                );
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
-                _server.KillAsync().Wait(1000);
-                Logger.LogError($"Proto.Actor server stopped on {ProcessRegistry.Instance.Address} with error:\n{ex.Message}");
+                await server.KillAsync();
+
+                Logger.LogError(
+                    ex, "Proto.Actor server stopped on {Address} with error: {Message}",
+                    _system.ProcessRegistry.Address, ex.Message
+                );
             }
         }
 
-        private static void SpawnActivator()
+        private void SpawnActivator()
         {
-            var props = Props.FromProducer(() => new Activator()).WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
-            ActivatorPid = RootContext.Empty.SpawnNamed(props, "activator");
+            var props = Props.FromProducer(() => new Activator(this, _system)).WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
+            ActivatorPid = _system.Root.SpawnNamed(props, "activator");
         }
 
-        private static void StopActivator()
-        {
-            RootContext.Empty.Stop(ActivatorPid);
-        }
+        private void StopActivator() => _system.Root.Stop(ActivatorPid);
 
-        public static PID ActivatorForAddress(string address)
-        {
-            return new PID(address, "activator");
-        }
+        public PID ActivatorForAddress(string address) => new PID(address, "activator");
 
-        public static Task<ActorPidResponse> SpawnAsync(string address, string kind, TimeSpan timeout)
-        {
-            return SpawnNamedAsync(address, "", kind, timeout);
-        }
+        public Task<ActorPidResponse> SpawnAsync(string address, string kind, TimeSpan timeout) => SpawnNamedAsync(address, "", kind, timeout);
 
-        public static async Task<ActorPidResponse> SpawnNamedAsync(string address, string name, string kind, TimeSpan timeout)
+        public async Task<ActorPidResponse> SpawnNamedAsync(string address, string name, string kind, TimeSpan timeout)
         {
             var activator = ActivatorForAddress(address);
 
-            var res = await RootContext.Empty.RequestAsync<ActorPidResponse>(activator, new ActorPidRequest
-            {
-                Kind = kind,
-                Name = name
-            }, timeout);
+            var res = await _system.Root.RequestAsync<ActorPidResponse>(
+                activator, new ActorPidRequest
+                {
+                    Kind = kind,
+                    Name = name
+                }, timeout
+            );
 
             return res;
         }
 
-        public static void SendMessage(PID pid, object msg, int serializerId)
+        public void SendMessage(PID pid, object msg, int serializerId)
         {
             var (message, sender, header) = Proto.MessageEnvelope.Unwrap(msg);
 
             var env = new RemoteDeliver(header, message, pid, sender, serializerId);
-            EndpointManager.RemoteDeliver(env);
+            _endpointManager.RemoteDeliver(env);
         }
     }
 }

@@ -21,8 +21,9 @@ class Program
                 {"SpanID", Guid.NewGuid().ToString()}
             }
         );
-
+        var system = new ActorSystem();
         var root = new RootContext(
+            system,
             headers,
             next => async (c, target, envelope) =>
             {
@@ -42,7 +43,7 @@ class Program
                 //that is, the sender side of things just put the message on the mailbox and exits
                 Console.WriteLine(" 1 Exit RootContext SenderMiddleware - Send is async, this is out of order by design");
             });
-        
+
         var actor = Props.FromFunc(
                 c =>
                 {
@@ -76,8 +77,8 @@ class Program
                     Console.WriteLine("  2 Exit Actor ReceiverMiddleware");
                 }
                 else
-                {  
-                    await next(context, envelope);   
+                {
+                    await next(context, envelope);
                 }
             }).WithSenderMiddleware(next => async (context, target, envelope) =>
             {
@@ -94,7 +95,7 @@ class Program
                 Console.WriteLine("    4 Exit Actor SenderMiddleware");
             });
         var pid = root.Spawn(actor);
-        
+
         Task.Delay(500).Wait();
         Console.WriteLine("0 TraceID: " + root.Headers.GetOrDefault("TraceID"));
         Console.WriteLine("0 SpanID: " + root.Headers.GetOrDefault("SpanID"));

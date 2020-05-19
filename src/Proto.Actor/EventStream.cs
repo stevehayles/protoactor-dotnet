@@ -14,22 +14,26 @@ namespace Proto
 {
     public class EventStream : EventStream<object>
     {
-        public static readonly EventStream Instance = new EventStream();
+
 
         private readonly ILogger _logger = Log.CreateLogger<EventStream>();
 
         internal EventStream()
         {
             Subscribe(msg =>
-            {
-                if (msg is DeadLetterEvent letter)
                 {
-                    _logger.LogInformation("[DeadLetter] '{0}' got '{1}:{2}' from '{3}'", letter.Pid.ToShortString(),
-                        letter.Message.GetType().Name, letter.Message, letter.Sender?.ToShortString());
+                    if (msg is DeadLetterEvent letter)
+                    {
+                        _logger.LogInformation("[DeadLetter] '{0}' got '{1}:{2}' from '{3}'",
+                            letter.Pid.ToShortString(),
+                            letter.Message.GetType().Name, letter.Message, letter.Sender?.ToShortString()
+                        );
+                    }
                 }
-            });
+            );
         }
     }
+
     public class EventStream<T>
     {
         private readonly ILogger _logger = Log.CreateLogger<EventStream<T>>();
@@ -41,34 +45,37 @@ namespace Proto
         {
         }
 
-        public Subscription<T> Subscribe(Action<T> action, IDispatcher dispatcher = null)
+        public Subscription<T> Subscribe(Action<T> action, IDispatcher? dispatcher = null)
         {
             var sub = new Subscription<T>(this, dispatcher ?? Dispatchers.SynchronousDispatcher, x =>
-            {
-                action(x);
-                return Actor.Done;
-            });
+                {
+                    action(x);
+                    return Actor.Done;
+                }
+            );
             _subscriptions.TryAdd(sub.Id, sub);
             return sub;
         }
 
-        public Subscription<T> Subscribe(Func<T, Task> action, IDispatcher dispatcher = null)
+        public Subscription<T> Subscribe(Func<T, Task> action, IDispatcher? dispatcher = null)
         {
             var sub = new Subscription<T>(this, dispatcher ?? Dispatchers.SynchronousDispatcher, action);
             _subscriptions.TryAdd(sub.Id, sub);
             return sub;
         }
 
-        public Subscription<T> Subscribe<TMsg>(Action<TMsg> action, IDispatcher dispatcher = null) where TMsg : T
+        public Subscription<T> Subscribe<TMsg>(Action<TMsg> action, IDispatcher? dispatcher = null) where TMsg : T
         {
             var sub = new Subscription<T>(this, dispatcher ?? Dispatchers.SynchronousDispatcher, msg =>
-            {
-                if (msg is TMsg typed)
                 {
-                    action(typed);
+                    if (msg is TMsg typed)
+                    {
+                        action(typed);
+                    }
+
+                    return Actor.Done;
                 }
-                return Actor.Done;
-            });
+            );
 
             _subscriptions.TryAdd(sub.Id, sub);
             return sub;
@@ -79,24 +86,23 @@ namespace Proto
             foreach (var sub in _subscriptions.Values)
             {
                 sub.Dispatcher.Schedule(() =>
-                {
-                    try
                     {
-                        sub.Action(msg);
+                        try
+                        {
+                            sub.Action(msg);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(0, ex, "Exception has occurred when publishing a message.");
+                        }
+
+                        return Actor.Done;
                     }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(0, ex, "Exception has occurred when publishing a message.");
-                    }
-                    return Actor.Done;
-                });
+                );
             }
         }
 
-        public void Unsubscribe(Guid id)
-        {
-            _subscriptions.TryRemove(id, out var _);
-        }
+        public void Unsubscribe(Guid id) => _subscriptions.TryRemove(id, out _);
     }
 
     public class Subscription<T>
@@ -115,9 +121,6 @@ namespace Proto
         public IDispatcher Dispatcher { get; }
         public Func<T, Task> Action { get; }
 
-        public void Unsubscribe()
-        {
-            _eventStream.Unsubscribe(Id);
-        }
+        public void Unsubscribe() => _eventStream.Unsubscribe(Id);
     }
 }

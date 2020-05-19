@@ -6,7 +6,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 
 namespace Proto.Remote
@@ -23,121 +22,114 @@ namespace Proto.Remote
         public PID Watcher { get; }
     }
 
-    public static class EndpointManager
+    public class EndpointManager
     {
         private class ConnectionRegistry : ConcurrentDictionary<string, Lazy<Endpoint>> { }
 
-        private static readonly ILogger Logger = Log.CreateLogger("EndpointManager");
+        private static readonly ILogger Logger = Log.CreateLogger(typeof(EndpointManager).FullName);
 
-        private static readonly ConnectionRegistry Connections = new ConnectionRegistry();
-        private static PID _endpointSupervisor;
-        private static Subscription<object> _endpointTermEvnSub;
-        private static Subscription<object> _endpointConnEvnSub;
+        private readonly ConnectionRegistry Connections = new ConnectionRegistry();
+        private readonly ActorSystem _system;
+        private readonly Remote _remote;
+        private PID endpointSupervisor;
+        private Subscription<object> endpointTermEvnSub;
+        private Subscription<object> endpointConnEvnSub;
 
-        public static void Start()
+        public EndpointManager(Remote remote, ActorSystem system)
+        {
+            _remote = remote;
+            _system = system;
+        }
+
+        public void Start()
         {
             Logger.LogDebug("Started EndpointManager");
 
-            var props = Props.FromProducer(() => new EndpointSupervisor())
-                             .WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy)
-                             .WithDispatcher(Mailbox.Dispatchers.SynchronousDispatcher);
-            _endpointSupervisor = RootContext.Empty.SpawnNamed(props, "EndpointSupervisor");
-            _endpointTermEvnSub = EventStream.Instance.Subscribe<EndpointTerminatedEvent>(OnEndpointTerminated);
-            _endpointConnEvnSub = EventStream.Instance.Subscribe<EndpointConnectedEvent>(OnEndpointConnected);
+            var props = Props
+                .FromProducer(() => new EndpointSupervisor(_remote, _system))
+                .WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy)
+                .WithDispatcher(Mailbox.Dispatchers.SynchronousDispatcher);
+
+            endpointSupervisor = _system.Root.SpawnNamed(props, "EndpointSupervisor");
+            endpointTermEvnSub = _system.EventStream.Subscribe<EndpointTerminatedEvent>(OnEndpointTerminated);
+            endpointConnEvnSub = _system.EventStream.Subscribe<EndpointConnectedEvent>(OnEndpointConnected);
         }
 
-        public static void Stop()
+        public void Stop()
         {
-            EventStream.Instance.Unsubscribe(_endpointTermEvnSub.Id);
-            EventStream.Instance.Unsubscribe(_endpointConnEvnSub.Id);
+            _system.EventStream.Unsubscribe(endpointTermEvnSub.Id);
+            _system.EventStream.Unsubscribe(endpointConnEvnSub.Id);
 
             Connections.Clear();
-            RootContext.Empty.Stop(_endpointSupervisor);
+            _system.Root.Stop(endpointSupervisor);
             Logger.LogDebug("Stopped EndpointManager");
         }
 
-        private static void OnEndpointTerminated(EndpointTerminatedEvent msg)
+        private void OnEndpointTerminated(EndpointTerminatedEvent msg)
         {
-            if (Connections.TryRemove(msg.Address, out var v))
-            {
-                var endpoint = v.Value;
-                RootContext.Empty.Send(endpoint.Watcher,msg);
-                RootContext.Empty.Send(endpoint.Writer,msg);
-            }
+            Logger.LogDebug("Endpoint {Address} terminated removing from connections", msg.Address);
+
+            if (!Connections.TryRemove(msg.Address, out var v)) return;
+
+            var endpoint = v.Value;
+            _system.Root.Send(endpoint.Watcher, msg);
+            _system.Root.Send(endpoint.Writer, msg);
         }
 
-        private static void OnEndpointConnected(EndpointConnectedEvent msg)
+        private void OnEndpointConnected(EndpointConnectedEvent msg)
         {
             var endpoint = EnsureConnected(msg.Address);
-            RootContext.Empty.Send(endpoint.Watcher,msg);
+            _system.Root.Send(endpoint.Watcher, msg);
+            endpoint.Writer.SendSystemMessage(_system, msg);
         }
 
-        public static void RemoteTerminate(RemoteTerminate msg)
+        public void RemoteTerminate(RemoteTerminate msg)
         {
             var endpoint = EnsureConnected(msg.Watchee.Address);
-            RootContext.Empty.Send(endpoint.Watcher,msg);
+            _system.Root.Send(endpoint.Watcher, msg);
         }
 
-        public static void RemoteWatch(RemoteWatch msg)
+        public void RemoteWatch(RemoteWatch msg)
         {
             var endpoint = EnsureConnected(msg.Watchee.Address);
-            RootContext.Empty.Send(endpoint.Watcher,msg);
+            _system.Root.Send(endpoint.Watcher, msg);
         }
 
-        public static void RemoteUnwatch(RemoteUnwatch msg)
+        public void RemoteUnwatch(RemoteUnwatch msg)
         {
             var endpoint = EnsureConnected(msg.Watchee.Address);
-            RootContext.Empty.Send(endpoint.Watcher,msg);
+            _system.Root.Send(endpoint.Watcher, msg);
         }
 
-        public static void RemoteDeliver(RemoteDeliver msg)
+        public void RemoteDeliver(RemoteDeliver msg)
         {
             var endpoint = EnsureConnected(msg.Target.Address);
-            RootContext.Empty.Send(endpoint.Writer, msg);
+
+            Logger.LogDebug(
+                "Forwarding message {Message} from {From} for {Address} through EndpointWriter {Writer}",
+                msg.Message?.GetType(), msg.Sender?.Address, msg.Target?.Address, endpoint.Writer
+            );
+            _system.Root.Send(endpoint.Writer, msg);
         }
 
-        private static Endpoint EnsureConnected(string address)
+        private Endpoint EnsureConnected(string address)
         {
-            var conn = Connections.GetOrAdd(address, v =>
-                new Lazy<Endpoint>(() =>
-                    RootContext.Empty.RequestAsync<Endpoint>(_endpointSupervisor, v).Result)
+            var conn = Connections.GetOrAdd(
+                address, v =>
+                    new Lazy<Endpoint>(
+                        () =>
+                        {
+                            Logger.LogDebug("Requesting new endpoint for {Address}", v);
+
+                            var endpoint = _system.Root.RequestAsync<Endpoint>(endpointSupervisor, v).Result;
+
+                            Logger.LogDebug("Created new endpoint for {Address}", v);
+
+                            return endpoint;
+                        }
+                    )
             );
             return conn.Value;
-        }
-    }
-
-    public class EndpointSupervisor : IActor, ISupervisorStrategy
-    {
-        public Task ReceiveAsync(IContext context)
-        {
-            if (context.Message is string address)
-            {
-                var watcher = SpawnWatcher(address, context);
-                var writer = SpawnWriter(address, context);
-                context.Respond(new Endpoint(writer, watcher));
-            }
-            return Actor.Done;
-        }
-
-        public void HandleFailure(ISupervisor supervisor, PID child, RestartStatistics rs, Exception cause, object message)
-        {
-            supervisor.RestartChildren(cause, child);
-        }
-
-        private static PID SpawnWatcher(string address, IContext context)
-        {
-            var watcherProps = Props.FromProducer(() => new EndpointWatcher(address));
-            var watcher = context.Spawn(watcherProps);
-            return watcher;
-        }
-
-        private PID SpawnWriter(string address, IContext context)
-        {
-            var writerProps =
-                Props.FromProducer(() => new EndpointWriter(address, Remote.RemoteConfig.ChannelOptions, Remote.RemoteConfig.CallOptions, Remote.RemoteConfig.ChannelCredentials))
-                     .WithMailbox(() => new EndpointWriterMailbox(Remote.RemoteConfig.EndpointWriterBatchSize));
-            var writer = context.Spawn(writerProps);
-            return writer;
         }
     }
 }

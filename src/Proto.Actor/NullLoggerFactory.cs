@@ -13,10 +13,7 @@ namespace Proto
     {
         public static readonly NullLoggerFactory Instance = new NullLoggerFactory();
 
-        public ILogger CreateLogger(string name)
-        {
-            return NullLogger.Instance;
-        }
+        public ILogger CreateLogger(string name) => NullLogger.Instance;
 
         public void AddProvider(ILoggerProvider provider)
         {

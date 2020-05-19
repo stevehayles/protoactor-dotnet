@@ -1,4 +1,10 @@
-﻿using System;
+﻿// -----------------------------------------------------------------------
+//   <copyright file="WeightedMemberStatus.cs" company="Asynkron HB">
+//       Copyright (C) 2015-2018 Asynkron HB All rights reserved
+//   </copyright>
+// -----------------------------------------------------------------------
+
+using System;
 using System.Threading;
 
 namespace Proto.Cluster.WeightedMemberStrategy
@@ -11,16 +17,16 @@ namespace Proto.Cluster.WeightedMemberStrategy
         private int _maxWeight;
         private int _gcd;
 
-        private IMemberStrategy _m;
+        private readonly IMemberStrategy _memberStrategy;
 
-        public WeightedRoundRobin(IMemberStrategy m)
+        public WeightedRoundRobin(IMemberStrategy memberStrategy)
         {
-            this._m = m;
+            _memberStrategy = memberStrategy;
         }
 
         public string GetNode()
         {
-            var members = _m.GetAllMembers();
+            var members = _memberStrategy.GetAllMembers();
             var l = members.Count;
             if (l == 0) return "";
             if (l == 1) return members[0].Address;
@@ -30,6 +36,7 @@ namespace Proto.Cluster.WeightedMemberStrategy
                 while (true)
                 {
                     _currIndex = (_currIndex + 1) % l;
+
                     if (_currIndex == 0)
                     {
                         if (_currWeight > _gcd)
@@ -41,6 +48,7 @@ namespace Proto.Cluster.WeightedMemberStrategy
                             _currWeight = _maxWeight;
                         }
                     }
+
                     if (((WeightedMemberStatusValue) members[_currIndex].StatusValue).Weight >= _currWeight)
                     {
                         return members[_currIndex].Address;
@@ -58,51 +66,61 @@ namespace Proto.Cluster.WeightedMemberStrategy
         private int GetMaxWeight()
         {
             var max = 0;
-            foreach (var m in _m.GetAllMembers())
+
+            foreach (var m in _memberStrategy.GetAllMembers())
             {
                 var statusVal = (WeightedMemberStatusValue) m.StatusValue;
+
                 if (statusVal.Weight > max)
                     max = statusVal.Weight;
             }
+
             return max;
         }
 
         private int GetGCD()
         {
-            var members = _m.GetAllMembers();
+            var members = _memberStrategy.GetAllMembers();
             if (members.Count == 0) return 0;
 
             var ints = new int[members.Count];
+
             for (int i = 0; i < members.Count; i++)
             {
                 ints[i] = ((WeightedMemberStatusValue) members[i].StatusValue).Weight;
             }
+
             return NGCD(ints);
         }
 
         private static int GCD(int a, int b)
         {
-            if (a < b)
+            while (true)
             {
-                var c = a;
+                if (a < b)
+                {
+                    var c = a;
+                    a = b;
+                    b = c;
+                }
+
+                if (b == 0) return a;
+
+                var a1 = a;
                 a = b;
-                b = c;
+                b = a1 % b;
             }
-            if (b == 0) return a;
-            return GCD(b, a % b);
         }
 
         private static int NGCD(int[] ints)
         {
             var l = ints.Length;
-            if (l == 1)
-                return ints[0];
-            return GCD(ints[l - 1], NGCD(SubArray(ints, 0, l - 1)));
+            return l == 1 ? ints[0] : GCD(ints[l - 1], NGCD(SubArray(ints, 0, l - 1)));
         }
 
         private static T[] SubArray<T>(T[] data, int index, int length)
         {
-            T[] result = new T[length];
+            var result = new T[length];
             Array.Copy(data, index, result, 0, length);
             return result;
         }

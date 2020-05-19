@@ -7,9 +7,11 @@ namespace Proto
     {
         private readonly IServiceProvider _serviceProvider;
         private readonly ActorPropsRegistry _actorPropsRegistry;
+        private readonly ActorSystem _actorSystem;
 
-        public ActorFactory(IServiceProvider serviceProvider, ActorPropsRegistry actorPropsRegistry)
+        public ActorFactory(ActorSystem actorSystem, IServiceProvider serviceProvider, ActorPropsRegistry actorPropsRegistry)
         {
+            _actorSystem = actorSystem;
             _serviceProvider = serviceProvider;
             _actorPropsRegistry = actorPropsRegistry;
         }
@@ -30,7 +32,7 @@ namespace Proto
         public PID GetActor<T>(string id = null, string address = null, IContext parent = null, Func<Props, Props> props = null, params object[] parameters)
             where T : IActor
         {
-            id = id ?? ProcessRegistry.Instance.NextId();
+            id = id ?? _actorSystem.ProcessRegistry.NextId();
 
             var newProps = new Props().WithProducer(() => ActivatorUtilities.CreateInstance<T>(_serviceProvider, parameters));
 
@@ -52,7 +54,8 @@ namespace Proto
             }
 
             var pid = new PID(address, pidId);
-            if (ProcessRegistry.Instance.Get(pid) is DeadLetterProcess)
+            var reff = ProcessRegistry.Instance.Get(pid);
+            if (reff is DeadLetterProcess)
             {
                 pid = create();
             }
@@ -69,7 +72,7 @@ namespace Proto
 
             if (parent == null)
             {
-                return RootContext.Empty.SpawnNamed(props, id);
+                return _actorSystem.Root.SpawnNamed(props, id);
             }
 
             return parent.SpawnNamed(props, id);

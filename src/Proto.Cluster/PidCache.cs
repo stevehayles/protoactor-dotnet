@@ -10,28 +10,34 @@ using Microsoft.Extensions.Logging;
 
 namespace Proto.Cluster
 {
-    internal static class PidCache
+    class PidCache
     {
-        private static PID _watcher;
-        private static Subscription<object> _clusterTopologyEvnSub;
+        private PID watcher;
+        private Subscription<object> clusterTopologyEvnSub;
 
-        private static readonly ConcurrentDictionary<string, PID> Cache = new ConcurrentDictionary<string, PID>();
-        private static readonly ConcurrentDictionary<string, string> ReverseCache = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, PID> Cache = new ConcurrentDictionary<string, PID>();
+        private readonly ConcurrentDictionary<string, string> ReverseCache = new ConcurrentDictionary<string, string>();
 
-        internal static void Setup()
+        public Cluster Cluster { get; }
+
+        internal PidCache(Cluster cluster)
         {
-            var props = Props.FromProducer(() => new PidCacheWatcher()).WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
-            _watcher = RootContext.Empty.SpawnNamed(props, "PidCacheWatcher");
-            _clusterTopologyEvnSub = Actor.EventStream.Subscribe<MemberStatusEvent>(OnMemberStatusEvent);
+            Cluster = cluster;
+        }
+        internal void Setup()
+        {
+            var props = Props.FromProducer(() => new PidCacheWatcher(this)).WithGuardianSupervisorStrategy(Supervision.AlwaysRestartStrategy);
+            watcher = Cluster.System.Root.SpawnNamed(props, "PidCacheWatcher");
+            clusterTopologyEvnSub = Cluster.System.EventStream.Subscribe<MemberStatusEvent>(OnMemberStatusEvent);
         }
 
-        internal static void Stop()
+        internal void Stop()
         {
-            RootContext.Empty.Stop(_watcher);
-            Actor.EventStream.Unsubscribe(_clusterTopologyEvnSub.Id);
+            Cluster.System.Root.Stop(watcher);
+            Cluster.System.EventStream.Unsubscribe(clusterTopologyEvnSub.Id);
         }
 
-        internal static void OnMemberStatusEvent(MemberStatusEvent evn)
+        private void OnMemberStatusEvent(MemberStatusEvent evn)
         {
             if (evn is MemberLeftEvent || evn is MemberRejoinedEvent)
             {
@@ -39,41 +45,37 @@ namespace Proto.Cluster
             }
         }
 
-        internal static bool TryGetCache(string name, out PID pid)
+        internal bool TryGetCache(string name, out PID pid) => Cache.TryGetValue(name, out pid);
+
+        internal bool TryAddCache(string name, PID pid)
         {
-            return Cache.TryGetValue(name, out pid);
+            if (!Cache.TryAdd(name, pid)) return false;
+
+            var key = pid.ToShortString();
+            ReverseCache.TryAdd(key, name);
+            Cluster.System.Root.Send(watcher, new WatchPidRequest(pid));
+            return true;
         }
 
-        internal static bool TryAddCache(string name, PID pid)
-        {
-            if (Cache.TryAdd(name, pid))
-            {
-                var key = pid.ToShortString();
-                ReverseCache.TryAdd(key, name);
-                RootContext.Empty.Send(_watcher, new WatchPidRequest(pid));
-                return true;
-            }
-            return false;
-        }
-
-        internal static void RemoveCacheByPid(PID pid)
+        internal void RemoveCacheByPid(PID pid)
         {
             var key = pid.ToShortString();
+
             if (ReverseCache.TryRemove(key, out var name))
             {
                 Cache.TryRemove(name, out _);
             }
         }
 
-        internal static void RemoveCacheByName(string name)
+        internal void RemoveCacheByName(string name)
         {
-            if(Cache.TryRemove(name, out var pid))
+            if (Cache.TryRemove(name, out var pid))
             {
                 ReverseCache.TryRemove(pid.ToShortString(), out _);
             }
         }
 
-        internal static void RemoveCacheByMemberAddress(string memberAddress)
+        private void RemoveCacheByMemberAddress(string memberAddress)
         {
             foreach (var (name, pid) in Cache.ToArray())
             {
@@ -87,16 +89,22 @@ namespace Proto.Cluster
         }
     }
 
-    internal class WatchPidRequest
+    class WatchPidRequest
     {
         internal PID Pid { get; }
 
-        public WatchPidRequest(PID pid) { Pid = pid; }
+        public WatchPidRequest(PID pid) => Pid = pid;
     }
 
-    internal class PidCacheWatcher : IActor
+    class PidCacheWatcher : IActor
     {
         private readonly ILogger _logger = Log.CreateLogger<PidCacheWatcher>();
+        public PidCacheWatcher(PidCache pidCache)
+        {
+            PidCache = pidCache;
+        }
+
+        public PidCache PidCache { get; }
 
         public Task ReceiveAsync(IContext context)
         {
@@ -112,6 +120,7 @@ namespace Proto.Cluster
                     PidCache.RemoveCacheByPid(msg.Who);
                     break;
             }
+
             return Actor.Done;
         }
     }

@@ -8,16 +8,8 @@ namespace Proto.Schedulers.SimpleScheduler
     {
         private readonly ISenderContext _context;
 
-        public SimpleScheduler()
-        {
-            _context = RootContext.Empty;
-        }
+        public SimpleScheduler(ISenderContext context) => _context = context;
 
-        public SimpleScheduler(ISenderContext context)
-        {
-            _context = context;
-        }
-        
         public ISimpleScheduler ScheduleTellOnce(TimeSpan delay, PID target, object message)
         {
             Task.Run(async () =>
@@ -46,7 +38,7 @@ namespace Proto.Schedulers.SimpleScheduler
                             return;
 
                         _context.Send(target, message);
-                        
+
                         await Task.Delay(interval, cts.Token);
                     }
                 }
@@ -75,7 +67,7 @@ namespace Proto.Schedulers.SimpleScheduler
 
         public ISimpleScheduler ScheduleRequestRepeatedly(TimeSpan delay, TimeSpan interval, PID sender, PID target, object message, out CancellationTokenSource cancellationTokenSource)
         {
-            CancellationTokenSource cts = new CancellationTokenSource();
+            var cts = new CancellationTokenSource();
 
             var _ = Task.Run(async () =>
             {
@@ -89,7 +81,7 @@ namespace Proto.Schedulers.SimpleScheduler
                             return;
 
                         //TODO: allow using sender
-                        _context.Request(target,message);                       
+                        _context.Request(target, message);
 
                         await Task.Delay(interval, cts.Token);
                     }

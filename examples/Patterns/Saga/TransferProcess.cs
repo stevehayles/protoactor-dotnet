@@ -22,7 +22,7 @@ namespace Saga
 
         private Props TryCredit(PID targetActor, decimal amount) => Props
             .FromProducer(() => new AccountProxy(targetActor, sender => new Credit(amount, sender)));
-        
+
         private Props TryDebit(PID targetActor, decimal amount) => Props
             .FromProducer(() => new AccountProxy(targetActor, sender => new Debit(amount, sender)));
 
@@ -58,7 +58,7 @@ namespace Saga
                     break;
             }
         }
-        
+
         private bool Fail()
         {
             var comparison = _random.NextDouble() * 100;
@@ -74,7 +74,7 @@ namespace Saga
                 case Started msg:
                     // default to Starting behavior
                     _behavior.Become(Starting);
-                    
+
                     // recover state from persistence - if there are any events, the current behavior 
                     // should change
                     await _persistence.RecoverStateAsync();
@@ -88,7 +88,7 @@ namespace Saga
                 case Stopped _ when !_processCompleted:
                     await _persistence.PersistEventAsync(new TransferFailed($"Unknown. Transfer Process crashed"));
                     await _persistence.PersistEventAsync(new EscalateTransfer($"Unknown failure. Transfer Process crashed"));
-                    context.Parent.Tell(new UnknownResult(context.Self));
+                    context.Send(context.Parent, new UnknownResult(context.Self));
                     return;
                 case Terminated _ when _restarting || _stopping:
                     // if the TransferProcess itself is restarting or stopping due to failure, we will receive a
@@ -103,7 +103,7 @@ namespace Saga
                     }
                     break;
             }
-            
+
             // pass through all messages to the current behavior. Note this includes the Started message we
             // may have just handled as what we should do when started depends on the current behavior
             await _behavior.ReceiveAsync(context);
@@ -117,7 +117,7 @@ namespace Saga
                 await _persistence.PersistEventAsync(new TransferStarted());
             }
         }
-        
+
         private async Task AwaitingDebitConfirmation(IContext context)
         {
             switch (context.Message)
@@ -134,7 +134,7 @@ namespace Saga
                 case Refused _:
                     // the debit has been refused, and should not be retried 
                     await _persistence.PersistEventAsync(new TransferFailed($"Debit refused"));
-                    context.Parent.Tell(new FailedButConsistentResult(context.Self));
+                    context.Send(context.Parent, new FailedButConsistentResult(context.Self));
                     StopAll(context);
                     break;
                 case Terminated _:
@@ -155,24 +155,24 @@ namespace Saga
                     context.SpawnNamed(TryCredit(_to, +_amount), "CreditAttempt");
                     break;
                 case OK msg:
-                    decimal fromBalance = await  context.RequestAsync<decimal>(_from, new GetBalance(), TimeSpan.FromMilliseconds(2000));
+                    decimal fromBalance = await context.RequestAsync<decimal>(_from, new GetBalance(), TimeSpan.FromMilliseconds(2000));
                     decimal toBalance = await context.RequestAsync<decimal>(_to, new GetBalance(), TimeSpan.FromMilliseconds(2000));
-        
+
                     await _persistence.PersistEventAsync(new AccountCredited());
                     await _persistence.PersistEventAsync(new TransferCompleted(_from, fromBalance, _to, toBalance));
                     context.Send(context.Parent, new SuccessResult(context.Self));
                     StopAll(context);
                     break;
                 case Refused msg:
-                    
+
                     // sometimes a remote service might say it refuses to perform some operation. 
                     // This is different from a failure
                     await _persistence.PersistEventAsync(new CreditRefused());
-                    
+
                     // we have definately debited the _from account as it was confirmed, and we 
                     // haven't creidted to _to account, so try and rollback
                     context.SpawnNamed(TryCredit(_from, +_amount), "RollbackDebit");
-                    
+
                     break;
                 case Terminated msg:
                     // at this point, we do not know if the credit succeeded. The remote account has not 
@@ -183,7 +183,7 @@ namespace Saga
                     break;
             }
         }
-        
+
         private async Task RollingBackDebit(IContext context)
         {
             switch (context.Message)
@@ -195,24 +195,24 @@ namespace Saga
                 case OK _:
                     await _persistence.PersistEventAsync(new DebitRolledBack());
                     await _persistence.PersistEventAsync(new TransferFailed($"Unable to rollback debit to {_to.Id}"));
-                    context.Parent.Tell(new FailedButConsistentResult(context.Self));
+                    context.Send(context.Parent, new FailedAndInconsistent(context.Self));
                     StopAll(context);
                     break;
                 case Refused _: // in between making the credit and debit, the _from account has started refusing!! :O
                 case Terminated _:
                     await _persistence.PersistEventAsync(new TransferFailed($"Unable to rollback process. {_from.Id} is owed {_amount}"));
                     await _persistence.PersistEventAsync(new EscalateTransfer($"{_from.Id} is owed {_amount}"));
-                    context.Parent.Tell(new FailedAndInconsistent(context.Self));
+                    context.Send(context.Parent, new FailedAndInconsistent(context.Self));
                     StopAll(context);
                     break;
             }
         }
-        
+
         private void StopAll(IContext context)
         {
-            RootContext.Empty.Stop(_from);
-            RootContext.Empty.Stop(_to);
-            RootContext.Empty.Stop(context.Self);
+            context.Stop(_from);
+            context.Stop(_to);
+            context.Stop(context.Self);
         }
     }
 }

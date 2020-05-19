@@ -12,6 +12,7 @@ namespace Proto
             var registry = new ActorPropsRegistry();
             registerAction?.Invoke(registry);
             services.AddSingleton(registry);
+            services.AddSingleton<ActorSystem>();
         }
 
         public static void AddProtoActorModule(this IServiceCollection services, IActorModule module)

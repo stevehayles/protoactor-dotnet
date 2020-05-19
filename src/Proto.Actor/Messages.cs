@@ -11,10 +11,12 @@ using Proto.Mailbox;
 namespace Proto
 {
     public abstract class AutoReceiveMessage
-    {}
+    {
+    }
 
     public sealed partial class Terminated : SystemMessage
-    {}
+    {
+    }
 
     public sealed class Restarting
     {
@@ -27,7 +29,7 @@ namespace Proto
 
     public class Failure : SystemMessage
     {
-        public Failure(PID who, Exception reason, RestartStatistics crs, object message)
+        public Failure(PID who, Exception reason, RestartStatistics crs, object? message)
         {
             Who = who;
             Reason = reason;
@@ -38,31 +40,24 @@ namespace Proto
         public Exception Reason { get; }
         public PID Who { get; }
         public RestartStatistics RestartStatistics { get; }
-        public object Message { get; }
+        public object? Message { get; }
     }
 
+    #nullable disable
     public sealed partial class Watch : SystemMessage
     {
-        public Watch(PID watcher)
-        {
-            Watcher = watcher;
-        }
+        public Watch(PID watcher) => Watcher = watcher;
     }
 
     public sealed partial class Unwatch : SystemMessage
     {
-        public Unwatch(PID watcher)
-        {
-            Watcher = watcher;
-        }
+        public Unwatch(PID watcher) => Watcher = watcher;
     }
+    #nullable enable
 
     public sealed class Restart : SystemMessage
     {
-        public Restart(Exception reason)
-        {
-            Reason = reason;
-        }
+        public Restart(Exception reason) => Reason = reason;
 
         public Exception Reason { get; }
     }
@@ -109,17 +104,18 @@ namespace Proto
     }
 
     public interface INotInfluenceReceiveTimeout
-    {}
+    {
+    }
 
     public class Continuation : SystemMessage
     {
-        public Continuation(Func<Task> fun, object message)
+        public Continuation(Func<Task>? fun, object? message)
         {
             Action = fun ?? throw new ArgumentNullException(nameof(fun));
             Message = message ?? throw new ArgumentNullException(nameof(message));
         }
 
-        public Func<Task> Action { get;  }
+        public Func<Task> Action { get; }
         public object Message { get; }
     }
 }

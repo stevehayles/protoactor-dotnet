@@ -9,9 +9,13 @@ namespace Proto.Remote
     public class RemoteProcess : Process
     {
         private readonly PID _pid;
+        private readonly EndpointManager _endpointManager;
+        private readonly Remote _remote;
 
-        public RemoteProcess(PID pid)
+        public RemoteProcess(Remote remote, ActorSystem system, EndpointManager endpointManager, PID pid) : base(system)
         {
+            _remote = remote;
+            _endpointManager = endpointManager;
             _pid = pid;
         }
 
@@ -21,19 +25,23 @@ namespace Proto.Remote
 
         private void Send(object msg)
         {
-            if (msg is Watch w)
+            switch (msg)
             {
-                var rw = new RemoteWatch(w.Watcher, _pid);
-                EndpointManager.RemoteWatch(rw);
-            }
-            else if (msg is Unwatch uw)
-            {
-                var ruw = new RemoteUnwatch(uw.Watcher, _pid);
-                EndpointManager.RemoteUnwatch(ruw);
-            }
-            else
-            {
-                Remote.SendMessage(_pid, msg,-1);
+                case Watch w:
+                    {
+                        var rw = new RemoteWatch(w.Watcher, _pid);
+                        _endpointManager.RemoteWatch(rw);
+                        break;
+                    }
+                case Unwatch uw:
+                    {
+                        var ruw = new RemoteUnwatch(uw.Watcher, _pid);
+                        _endpointManager.RemoteUnwatch(ruw);
+                        break;
+                    }
+                default:
+                    _remote.SendMessage(_pid, msg, -1);
+                    break;
             }
         }
     }

@@ -11,21 +11,24 @@ namespace Proto
 {
     public abstract class Process
     {
+        protected ActorSystem System { get; }
+
+        public Process(ActorSystem system)
+        {
+            System = system;
+        }
         protected internal abstract void SendUserMessage(PID pid, object message);
 
-        public virtual void Stop(PID pid)
-        {
-            SendSystemMessage(pid, Proto.Stop.Instance);
-        }
-
         protected internal abstract void SendSystemMessage(PID pid, object message);
+
+        public virtual void Stop(PID pid) => SendSystemMessage(pid, Proto.Stop.Instance);
     }
 
     public class ActorProcess : Process
     {
         private long _isDead;
 
-        public ActorProcess(IMailbox mailbox)
+        public ActorProcess(ActorSystem system, IMailbox mailbox) : base(system)
         {
             Mailbox = mailbox;
         }
@@ -38,15 +41,11 @@ namespace Proto
             private set => Interlocked.Exchange(ref _isDead, value ? 1 : 0);
         }
 
-        protected internal override void SendUserMessage(PID pid, object message)
-        {
+        protected internal override void SendUserMessage(PID pid, object message) => 
             Mailbox.PostUserMessage(message);
-        }
 
-        protected internal override void SendSystemMessage(PID pid, object message)
-        {
+        protected internal override void SendSystemMessage(PID pid, object message) =>
             Mailbox.PostSystemMessage(message);
-        }
 
         public override void Stop(PID pid)
         {

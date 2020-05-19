@@ -36,7 +36,8 @@ namespace Proto.Tests
 
     public class MiddlewareTests
     {
-        private static readonly RootContext Context = new RootContext();
+        private static readonly ActorSystem System = new ActorSystem();
+        private static readonly RootContext Context = System.Root;
 
 
         [Fact]
