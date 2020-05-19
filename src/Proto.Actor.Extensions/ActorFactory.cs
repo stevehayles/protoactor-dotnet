@@ -19,14 +19,14 @@ namespace Proto
         public PID RegisterActor<T>(T actor, string id = null, string address = null, IContext parent = null)
             where T : IActor
         {
-            id = id ?? ProcessRegistry.Instance.NextId();
+            id = id ?? _actorSystem.ProcessRegistry.NextId();
 
-            return GetOrCreateActor(id, address, parent, () => CreateActor<T>(id, parent, () => new Props().WithProducer(() => actor)));
+            return GetActor(id, address, parent, () => CreateActor<T>(id, parent, () => new Props().WithProducer(() => actor)));
         }
 
         public PID GetActor(string id, string address = null, IContext parent = null)
         {
-            return GetOrCreateActor(id, address, parent, () => throw new InvalidOperationException($"Actor not created {id}"));
+            return GetActor(id, address, parent, () => throw new InvalidOperationException($"Actor not created {id}"));
         }
 
         public PID GetActor<T>(string id = null, string address = null, IContext parent = null, Func<Props, Props> props = null, params object[] parameters)
@@ -40,10 +40,10 @@ namespace Proto
                 ? (Func<Props>)(() => props(newProps))
                 : () => newProps;
 
-            return GetOrCreateActor(id, address, parent, () => CreateActor<T>(id, parent, producer));
+            return GetActor(id, address, parent, () => CreateActor<T>(id, parent, producer));
         }
 
-        private PID GetOrCreateActor(string id, string address, IContext parent, Func<PID> create)
+        private PID GetActor(string id, string address, IContext parent, Func<PID> create)
         {
             address = address ?? "nonhost";
 
@@ -54,7 +54,7 @@ namespace Proto
             }
 
             var pid = new PID(address, pidId);
-            var reff = ProcessRegistry.Instance.Get(pid);
+            var reff = _actorSystem.ProcessRegistry.Get(pid);
             if (reff is DeadLetterProcess)
             {
                 pid = create();

@@ -14,10 +14,17 @@ namespace Proto
             services.AddSingleton(registry);
             services.AddSingleton<ActorSystem>();
         }
-
-        public static void AddProtoActorModule(this IServiceCollection services, IActorModule module)
+        public static void AddProtoActor<T>(this IServiceCollection services) where T : IProtoActorModule
         {
-            module.Configure(services);
+            services.AddSingleton<ActorPropsRegistry>();
+
+            services.AddSingleton<IActorFactory, ActorFactory>(provider =>
+            {
+                var module = (T)ActivatorUtilities.CreateInstance(provider, typeof(T));
+                module.Init(provider.GetService<ActorPropsRegistry>());
+
+                return (ActorFactory)ActivatorUtilities.CreateInstance(provider, typeof(ActorFactory));
+            });
         }
     }
 }
