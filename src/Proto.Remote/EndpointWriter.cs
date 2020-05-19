@@ -22,19 +22,14 @@ namespace Proto.Remote
         private int _serializerId;
         private readonly string _address;
         private readonly ILogger _logger = Log.CreateLogger<EndpointWriter>();
-        private readonly BlockingCollection<MessageBatch> _messageBatchQueue;
-        private readonly IAsyncEnumerable<MessageBatch> _messages;
-        private readonly AsyncCollection<MessageBatch> _messageQueue;
+        private readonly BlockingCollection<MessageBatch> _messageQueue;
 
         private Remoting.RemotingClient _client;
 
         public EndpointWriter(string address)
         {
             _address = address;
-            //_messageBatchQueue = new BlockingCollection<MessageBatch>();
-            //_messages = Messages();
-
-            _messageQueue = new AsyncCollection<MessageBatch>();
+            _messageQueue = new BlockingCollection<MessageBatch>();
         }
 
         public async Task ReceiveAsync(IContext context)
@@ -106,19 +101,13 @@ namespace Proto.Remote
 
                     _messageQueue.Add(batch);
 
-                    await foreach (var x in _client.Receive(new [] { batch }.ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty))
-                    {
-                        ;
-                    }
-
                     break;
             }
         }
 
         async IAsyncEnumerable<MessageBatch> Messages()
         {
-            int a = 6;
-            foreach (var messageBatch in _messageBatchQueue.GetConsumingEnumerable())
+            foreach (var messageBatch in _messageQueue.GetConsumingEnumerable())
             {
                 yield return messageBatch;
                 await Task.Delay(0);
@@ -146,11 +135,20 @@ namespace Proto.Remote
                 var res = await _client.Connect(new ConnectRequest(), ReadOnlySequence<byte>.Empty);
                 _serializerId = res.DefaultSerializerId;
 
-                /*
-                _ = Task.Run(() =>
+                _ = Task.Run(async () =>
                 {
-                    _client.Receive(_messageQueue, ReadOnlySequence<byte>.Empty);
-                });  */  
+                    await foreach (var unit in _client.Receive(Messages(), ReadOnlySequence<byte>.Empty))
+                    {
+                        ;
+                    }
+
+                    //await foreach (var t in Messages())
+                    //{
+                    //    ;
+                   // }
+
+                    //_client.Receive(_messageQueue.GetConsumingEnumerable().ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty);
+                }); 
             }
             catch (Exception ex)
             {

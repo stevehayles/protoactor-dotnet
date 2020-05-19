@@ -15,11 +15,13 @@ using static Proto.Remote.Remoting;
 
 namespace Proto.Remote
 {
-    public class EndpointReader : RemotingServer
+    public class EndpointReader : IRSocketService, IRemoting
     {     
         private bool _suspended;
 
-        public override Task<ConnectResponse> Connect(ConnectRequest message, ReadOnlySequence<byte> metadata)
+        public string ServiceName => __Service;
+
+        public Task<ConnectResponse> Connect(ConnectRequest message, ReadOnlySequence<byte> metadata)
         {
             if (_suspended)
                 throw new Exception("Suspended");
@@ -27,17 +29,11 @@ namespace Proto.Remote
             return Task.FromResult(new ConnectResponse() { DefaultSerializerId = Serialization.DefaultSerializerId });
         }
 
-        public override IAsyncEnumerable<Unit> Receive(IAsyncEnumerable<MessageBatch> messages, ReadOnlySequence<byte> metadata)
+        public async IAsyncEnumerable<Unit> Receive(IAsyncEnumerable<MessageBatch> messageBatches, ReadOnlySequence<byte> metadata)
         {
             var targets = new PID[100];
 
-            //var x = await messages.Select(m => m).ToListAsync();
-
-            return from message in messages
-                   select new Unit();
-
-            /*
-            await foreach(var batch in messages)
+            await foreach(var batch in messageBatches)
             {
                 if (_suspended)
                     break;
@@ -83,7 +79,27 @@ namespace Proto.Remote
 
                 yield return new Unit();
             }
-            */
+        }
+
+        public IAsyncEnumerable<ReadOnlySequence<byte>> Dispatch(ReadOnlySequence<byte> data, string method, ReadOnlySequence<byte> tracing, ReadOnlySequence<byte> metadata, IAsyncEnumerable<ReadOnlySequence<byte>> messages)
+        {
+            switch (method)
+            {
+                case __Method_Connect:
+                    {
+                        return Connect(ConnectRequest.Parser.ParseFrom(data.ToArray()), metadata)
+                            .ToAsyncEnumerable()
+                            .Select(result => new ReadOnlySequence<byte>(Google.Protobuf.MessageExtensions.ToByteArray(result)));
+                    }
+                case __Method_Receive:
+                    {
+                        return Receive(messages.Select(message =>
+                        {
+                            return MessageBatch.Parser.ParseFrom(message.ToArray());
+                        }), metadata).Select(unit => new ReadOnlySequence<byte>(Google.Protobuf.MessageExtensions.ToByteArray(unit)));
+                    }
+                default: throw new InvalidOperationException("Unknown method: " + method);
+            }
         }
 
         public void Suspend(bool suspended)

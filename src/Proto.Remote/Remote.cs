@@ -59,10 +59,11 @@ namespace Proto.Remote
             EndpointManager.Start();         
             _endpointReader = new EndpointReader();
 
-            //var uri = new Uri($"tcp://{hostname}:{port}");
-            //_server = new RSocketRPCServer(uri, _endpointReader);
-            //_server.Start();
+            var uri = new Uri($"tcp://{hostname}:{port}");
+            _server = new RSocketRPCServer(uri, _endpointReader);
+            _server.Start();
 
+            /*
             var loopback = new LoopbackTransport();
             var server = new RSocketServer(loopback.Beyond);
             server.ConnectAsync().Wait();
@@ -128,16 +129,23 @@ namespace Proto.Remote
 
                 //await service.Connect(new ConnectRequest(), ReadOnlySequence<byte>.Empty);
 
-                var results = await service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable()).ToListAsync();
+                //var results = await service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable()).ToListAsync();
 
-                /*
+                //;
+                
+                await foreach (var unit in service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty))
+                {
+                    break;
+                }
+
+                await Task.Delay(2000);
+
                 await foreach (var unit in service.Receive(new[] { batch, batch, batch }.ToAsyncEnumerable(), ReadOnlySequence<byte>.Empty))
                 {
                     ;
                 }
-                */
 
-            });
+            });*/
 
             var address = $"{hostname}:{port}";
             ProcessRegistry.Instance.Address = address;
