@@ -30,6 +30,7 @@ namespace Proto
 
             SenderMiddleware = middleware.Reverse()
                 .Aggregate((Sender) DefaultSender, (inner, outer) => outer(inner));
+
             Headers = messageHeader ?? MessageHeader.Empty;
         }
 
